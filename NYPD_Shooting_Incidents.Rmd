@@ -1,0 +1,242 @@
+---
+title: "NYC Crime Data Analysis"
+author: "ABL"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+Living in Denver, my experience with New York City is limited to a single visit. However, through this data analysis, I aim to better understand crime patterns across NYC's boroughs. While I can't provide firsthand insights into neighborhood dynamics, I can offer an objective, data-driven analysis of crime patterns and trends. This outsider's perspective might even be valuable, as it relies purely on the data rather than preconceptions about different areas of the city.
+
+## Loading Required Libraries
+
+```{r libraries}
+library(tidyverse)
+library(lubridate)
+library(stats)
+library(ggplot2)
+library(scales)
+```
+
+## Data Import and Initial Review
+
+```{r import}
+# Import data
+nyc_crime <- read.csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+
+# Initial summary of data
+str(nyc_crime)
+summary(nyc_crime)
+```
+
+## Data Cleaning
+
+Before diving in, I needed to clean up my dataset. Like trying to follow a subway map for the first time, not all the information was useful for my journey. I removed several columns that had too many missing pieces:
+- INCIDENT_KEY: Just a reference number I don't need
+- Location descriptors (LOC_OF_OCCUR_DESC, LOC_CLASSFCTN_DESC, LOCATION_DESC): Too spotty to be useful
+- Perpetrator demographics: Unfortunately, these fields were mostly blank
+
+```{r cleaning}
+# Clean data
+nyc_crime_clean <- nyc_crime %>%
+  # Remove specified columns
+  select(-c(INCIDENT_KEY, LOC_OF_OCCUR_DESC, LOC_CLASSFCTN_DESC, 
+            LOCATION_DESC, PERP_AGE_GROUP, PERP_SEX, PERP_RACE)) %>%
+  # Convert date columns to proper format
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE),
+         OCCUR_TIME = hms(OCCUR_TIME)) %>%
+  # Convert categorical variables to factors
+  mutate(across(c(BORO, JURISDICTION_CODE, VIC_AGE_GROUP, 
+                  VIC_SEX, VIC_RACE), as.factor))
+
+# View cleaned data structure
+str(nyc_crime_clean)
+```
+
+## Visualization 1: Crime Incidents by Borough
+
+```{r viz1}
+boro_plot <- ggplot(nyc_crime_clean, aes(x = BORO, fill = BORO)) +
+  geom_bar() +
+  theme_minimal() +
+  labs(title = "Distribution of Crime Incidents by Borough",
+       x = "Borough",
+       y = "Number of Incidents") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(boro_plot)
+
+# Analysis of Borough Distribution
+boro_summary <- nyc_crime_clean %>%
+  count(BORO) %>%
+  arrange(desc(n))
+
+print("Borough Distribution Analysis:")
+print(boro_summary)
+```
+
+**A Denver Native's Look at NYC Crime Distribution**
+During my brief visit to NYC, I only experienced Manhattan, which makes this data particularly interesting. The chart shows crime reports across all five boroughs - from Brooklyn to Staten Island. Think of each bar as representing roughly the equivalent of different Denver metro areas in terms of population (though the comparison isn't perfect).
+
+**Making Sense of the Numbers**:
+- Each blue bar represents one borough's total reported incidents
+- Higher bars = more reported crimes
+- But here's the catch - bigger population usually means more incidents
+
+**What Jumps Out**:
+1. Brooklyn and Manhattan see a lot of action - not surprising given they're major tourist and business hubs
+2. Staten Island reports fewer incidents, but it's also less populated
+3. The Bronx and Queens fall somewhere in between, each with their own patterns
+
+Looking at this reminds me of comparing different areas of metro Denver - while the raw numbers tell one story, I need to consider population size and visitor traffic to get the full picture.
+
+## Visualization 2: Crime Over Time
+
+```{r viz2}
+time_plot <- nyc_crime_clean %>%
+  mutate(month = floor_date(OCCUR_DATE, "month")) %>%
+  count(month) %>%
+  ggplot(aes(x = month, y = n)) +
+  geom_line() +
+  theme_minimal() +
+  labs(title = "Crime Incidents Over Time",
+       x = "Date",
+       y = "Number of Incidents") +
+  scale_x_date(date_breaks = "12 months", date_labels = "%b %Y") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(time_plot)
+```
+
+**Crime Patterns Through the Seasons**
+Just like how Denver sees different types of activity depending on whether it's ski season or summer hiking weather, NYC's crime patterns flow with the calendar.
+
+**Reading the Trends**:
+Think of this line like a heart monitor for the city:
+- Each peak shows a busy period
+- Each valley shows a quieter time
+- The up and down motion tells us about seasonal changes
+
+**What's Interesting Here**:
+1. Notice how some patterns repeat year after year? That's not random
+2. Those sharp drops? Could be anything from policy changes to Covid lockdowns
+3. Summer months tend to see more activity - similar to how Denver comes alive in warm weather
+
+## Statistical Models
+
+### 1. Seasonal Breakdown
+
+```{r seasonal_model}
+# Prepare monthly data
+monthly_crimes <- nyc_crime_clean %>%
+  mutate(month = floor_date(OCCUR_DATE, "month")) %>%
+  count(month) %>%
+  complete(month = seq.Date(min(month), max(month), by="month"), fill = list(n = 0))
+
+# Convert to time series object
+crime_ts <- ts(monthly_crimes$n, 
+               frequency = 12,
+               start = c(year(min(monthly_crimes$month)), 
+                        month(min(monthly_crimes$month))))
+
+# Perform seasonal decomposition
+crime_decomp <- decompose(crime_ts)
+
+# Set smaller font size for the decomposition plot
+par(cex.lab = 0.7,    # Reduce label size
+    cex.axis = 0.8,   # Slightly reduce axis text
+    mar = c(2,4,2,2)) # Adjust margins if needed
+
+# Plot decomposition
+plot(crime_decomp, col = "blue")
+
+# Reset graphical parameters to default
+par(cex.lab = 1, cex.axis = 1, mar = c(5,4,4,2) + 0.1)
+
+# Extract seasonal patterns
+seasonal_pattern <- data.frame(
+  Month = month.abb,
+  Effect = round(crime_decomp$seasonal[1:12], 2)
+)
+
+print("Seasonal Effects on Crime Rates:")
+print(seasonal_pattern[order(seasonal_pattern$Effect, decreasing = TRUE), ])
+```
+
+Looking at crime patterns by season is like checking Denver's traffic patterns during ski season versus summer - there are clear patterns, but it's more complex in NYC given its size and variety of activities.
+
+### 2. Borough Safety Assessment
+
+```{r risk_model}
+# Calculate risk scores by borough
+borough_risk <- nyc_crime_clean %>%
+  group_by(BORO) %>%
+  summarise(
+    total_incidents = n(),
+    murder_flag_count = sum(STATISTICAL_MURDER_FLAG == "true", na.rm = TRUE),
+    murder_rate = (murder_flag_count/total_incidents * 100),
+    risk_score = murder_rate * 2  # Weighted score giving more importance to murders
+  ) %>%
+  arrange(desc(risk_score))
+
+# Visualize risk scores
+ggplot(borough_risk, aes(x = reorder(BORO, risk_score), y = risk_score, fill = BORO)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Borough Risk Assessment Scores",
+       x = "Borough",
+       y = "Risk Score (Based on Murder Rate)",
+       caption = "Higher scores indicate higher risk levels") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print("Borough Risk Assessment Summary:")
+print(borough_risk)
+```
+
+Coming from Denver, this model helps me understand NYC's borough-level safety patterns objectively, rather than relying on stereotypes or limited tourist experiences.
+
+## What I Learned
+
+As someone with limited firsthand experience of NYC, this analysis has been eye-opening. The data tells stories that my tourist's snapshot of Times Square could never reveal:
+
+1. Each borough has its own personality in terms of crime patterns
+
+2. The seasons play a bigger role than I would have guessed
+
+3. Simple tourist perceptions of "safe" and "unsafe" areas don't tell the whole story
+
+### Personal Bias
+
+Let me be transparent about my perspective:
+I'm looking at this data as a Denver resident who's only briefly experienced NYC.  My understanding of NYC neighborhoods comes mainly from data, not personal experience.  I've tried to let the numbers speak for themselves rather than rely on media portrayals or stereotypes.
+
+### Reproduce My Analysis
+
+If you'd like to reproduce my analysis:
+
+1. Get the packages installed
+
+2. Grab the data from: https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD
+
+3. Follow the code step by step
+
+4. Feel free to add your own local knowledge to interpret the results
+
+### What I Couldn't Cover
+
+1. The data doesn't tell me about neighborhood character or community
+
+2. COVID-19 definitely shook things up
+
+3. Borough-level analysis misses neighborhood nuances
+
+4. Some potentially interesting details were lost due to incomplete data
+
+```{r session_info}
+sessionInfo()
+```
